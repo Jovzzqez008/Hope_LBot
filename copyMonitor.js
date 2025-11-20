@@ -9,12 +9,24 @@ import { Connection, PublicKey } from '@solana/web3.js';
 import { getPriceService } from './priceService.js';
 import { getFlintrMetadata } from './flintrClient.js';
 
+const DEFAULT_RPC_URL = 'https://api.mainnet-beta.solana.com';
+const RPC_URL =
+  process.env.RPC_URL && process.env.RPC_URL.startsWith('http')
+    ? process.env.RPC_URL
+    : DEFAULT_RPC_URL;
+
+if (!process.env.RPC_URL || !process.env.RPC_URL.startsWith('http')) {
+  console.warn(
+    '⚠️ RPC_URL inválido o ausente. Usando https://api.mainnet-beta.solana.com como default.',
+  );
+}
+
 const redis = new IORedis(process.env.REDIS_URL, {
   maxRetriesPerRequest: null,
   retryDelayOnFailover: 100,
 });
 
-const connection = new Connection(process.env.RPC_URL, 'confirmed');
+const connection = new Connection(RPC_URL, 'confirmed');
 const copyStrategy = new CopyStrategy();
 const priceService = getPriceService();
 
