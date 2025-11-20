@@ -7,10 +7,11 @@ import { CopyStrategy } from './copyStrategy.js';
 import { sendTelegramAlert } from './telegram.js';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { getPriceService } from './priceService.js';
+import { getFlintrMetadata } from './flintrClient.js';
 
 const redis = new IORedis(process.env.REDIS_URL, {
   maxRetriesPerRequest: null,
-  retryDelayOnFailover: 100
+  retryDelayOnFailover: 100,
 });
 
 const connection = new Connection(process.env.RPC_URL, 'confirmed');
@@ -37,7 +38,7 @@ if (ENABLE_TRADING) {
     tradeExecutor = new TradeExecutor(
       process.env.PRIVATE_KEY,
       process.env.RPC_URL,
-      DRY_RUN
+      DRY_RUN,
     );
 
     positionManager = new PositionManager(redis);
@@ -69,13 +70,13 @@ async function checkTrackedWalletSold(mint, walletAddress) {
       return {
         sold: true,
         timestamp: parseInt(recentSell),
-        cached: true
+        cached: true,
       };
     }
 
     const signatures = await connection.getSignaturesForAddress(
       new PublicKey(walletAddress),
-      { limit: 20 }
+      { limit: 20 },
     );
 
     for (const sig of signatures) {
@@ -84,7 +85,8 @@ async function checkTrackedWalletSold(mint, walletAddress) {
 
       try {
         const tx = await connection.getParsedTransaction(sig.signature, {
-          maxSupportedTransactionVersion: 0
+          maxSupportedTransactionVersion: 0,
+          commitment: 'confirmed',
         });
 
         if (!tx || !tx.meta || tx.meta.err) continue;
@@ -94,17 +96,26 @@ async function checkTrackedWalletSold(mint, walletAddress) {
 
         for (let i = 0; i < postTokenBalances.length; i++) {
           const post = postTokenBalances[i];
-          const pre = preTokenBalances.find(p => p.accountIndex === post.accountIndex);
+          const pre = preTokenBalances.find(
+            (p) => p.accountIndex === post.accountIndex,
+          );
 
-          if (post.mint === mint && pre &&
-              post.uiTokenAmount.uiAmount < pre.uiTokenAmount.uiAmount) {
+          if (
+            post.mint === mint &&
+            pre &&
+            post.uiTokenAmount.uiAmount < pre.uiTokenAmount.uiAmount
+          ) {
             const sellTime = sig.blockTime * 1000;
-            await redis.setex(`wallet_sold:${walletAddress}:${mint}`, 600, sellTime.toString());
+            await redis.setex(
+              `wallet_sold:${walletAddress}:${mint}`,
+              600,
+              sellTime.toString(),
+            );
 
             return {
               sold: true,
               timestamp: sellTime,
-              signature: sig.signature
+              signature: sig.signature,
             };
           }
         }
@@ -114,7 +125,6 @@ async function checkTrackedWalletSold(mint, walletAddress) {
     }
 
     return { sold: false };
-
   } catch (error) {
     console.error('   ⚠️ Error checking wallet sell:', error.message);
     return { sold: false };
@@ -141,9 +151,11 @@ async function evaluateHybridExit(position, currentPrice, pnlPercent, currentSol
 
   if (holdTime < WALLET_EXIT_WINDOW) {
     console.log(`\n⚡ PHASE 1: WALLET EXIT DETECTED (0-3 min)`);
-    console.log(`   Hold time: ${Math.floor(holdTime/1000)}s`);
-    console.log(`   Wallet sold ${Math.floor(timeSinceSell/1000)}s ago`);
-    console.log(`   Current PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`);
+    console.log(`   Hold time: ${Math.floor(holdTime / 1000)}s`);
+    console.log(`   Wallet sold ${Math.floor(timeSinceSell / 1000)}s ago`);
+    console.log(
+      `   Current PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`,
+    );
     console.log(`   🎯 Action: COPY EXIT (early phase)`);
 
     return {
@@ -151,15 +163,15 @@ async function evaluateHybridExit(position, currentPrice, pnlPercent, currentSol
       phase: 'phase1',
       reason: 'wallet_exit_early',
       description: `Tracked wallet sold in first 3 minutes`,
-      priority: 2
+      priority: 2,
     };
   }
 
   if (holdTime >= WALLET_EXIT_WINDOW && holdTime < LOSS_PROTECTION_WINDOW) {
     if (pnlPercent < 0) {
       console.log(`\n🛡️ PHASE 2: WALLET EXIT + LOSS PROTECTION`);
-      console.log(`   Hold time: ${Math.floor(holdTime/1000)}s`);
-      console.log(`   Wallet sold ${Math.floor(timeSinceSell/1000)}s ago`);
+      console.log(`   Hold time: ${Math.floor(holdTime / 1000)}s`);
+      console.log(`   Wallet sold ${Math.floor(timeSinceSell / 1000)}s ago`);
       console.log(`   Current PnL: ${pnlPercent.toFixed(2)}% (NEGATIVE)`);
       console.log(`   🎯 Action: COPY EXIT (protect loss)`);
 
@@ -167,13 +179,15 @@ async function evaluateHybridExit(position, currentPrice, pnlPercent, currentSol
         shouldExit: true,
         phase: 'phase2',
         reason: 'wallet_exit_loss_protection',
-        description: `Wallet sold and position is negative (${pnlPercent.toFixed(2)}%)`,
-        priority: 2
+        description: `Wallet sold and position is negative (${pnlPercent.toFixed(
+          2,
+        )}%)`,
+        priority: 2,
       };
     } else {
       console.log(`\n✋ PHASE 2: WALLET SOLD BUT HOLDING`);
-      console.log(`   Hold time: ${Math.floor(holdTime/1000)}s`);
-      console.log(`   Wallet sold ${Math.floor(timeSinceSell/1000)}s ago`);
+      console.log(`   Hold time: ${Math.floor(holdTime / 1000)}s`);
+      console.log(`   Wallet sold ${Math.floor(timeSinceSell / 1000)}s ago`);
       console.log(`   Current PnL: +${pnlPercent.toFixed(2)}% (POSITIVE)`);
       console.log(`   🎯 Action: IGNORE wallet exit, use trailing stop`);
 
@@ -183,9 +197,11 @@ async function evaluateHybridExit(position, currentPrice, pnlPercent, currentSol
 
   if (holdTime >= INDEPENDENT_MODE_TIME) {
     console.log(`\n✅ PHASE 3: INDEPENDENT MODE`);
-    console.log(`   Hold time: ${Math.floor(holdTime/60000)} minutes`);
-    console.log(`   Wallet sold ${Math.floor(timeSinceSell/1000)}s ago`);
-    console.log(`   Current PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`);
+    console.log(`   Hold time: ${Math.floor(holdTime / 60000)} minutes`);
+    console.log(`   Wallet sold ${Math.floor(timeSinceSell / 1000)}s ago`);
+    console.log(
+      `   Current PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%`,
+    );
     console.log(`   🎯 Action: IGNORE wallet exit, using trailing stop`);
 
     return { shouldExit: false, phase: 'phase3_independent' };
@@ -201,11 +217,11 @@ async function processCopySignals() {
     try {
       const signalJson = await Promise.race([
         redis.lpop('copy_signals'),
-        new Promise(resolve => setTimeout(() => resolve(null), 2000))
+        new Promise((resolve) => setTimeout(() => resolve(null), 2000)),
       ]);
 
       if (!signalJson) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
 
@@ -239,7 +255,7 @@ async function processCopySignals() {
         // ✅ Ahora usamos TradeExecutor (PumpPortal/Pump.fun)
         const buyResult = await tradeExecutor.buyToken(
           copySignal.mint,
-          decision.amount
+          decision.amount,
         );
 
         if (buyResult.success) {
@@ -256,67 +272,110 @@ async function processCopySignals() {
             currentPrice,
             decision.amount,
             buyResult.tokensReceived,
-            buyResult.signature
+            buyResult.signature,
           );
 
-          await redis.hset(`position:${copySignal.mint}`, {
+          // 🔍 Intentar enriquecer la posición con metadata de Flintr
+          let flintrMeta = null;
+          try {
+            flintrMeta = await getFlintrMetadata(copySignal.mint, redis);
+          } catch {
+            flintrMeta = null;
+          }
+
+          const basePositionFields = {
             strategy: 'copy',
             walletSource: copySignal.walletAddress,
             walletName: copySignal.walletName,
             upvotes: decision.upvotes.toString(),
-            buyers: JSON.stringify(decision.buyers),
+            buyers: JSON.stringify(decision.buyers || []),
             originalSignature: copySignal.signature,
             originalDex: copySignal.dex,
             executedDex, // siempre Pump.fun vía PumpPortal
             confidence: decision.confidence.toString(),
-            exitStrategy: 'hybrid_smart_exit'
+            exitStrategy: 'hybrid_smart_exit',
+          };
+
+          const flintrFields =
+            flintrMeta && Object.keys(flintrMeta).length > 0
+              ? {
+                  flintr_name: flintrMeta.name || '',
+                  flintr_symbol: flintrMeta.symbol || '',
+                  flintr_image: flintrMeta.image || '',
+                  flintr_description: flintrMeta.description || '',
+                  flintr_creator: flintrMeta.creator || '',
+                  flintr_decimals: flintrMeta.decimals || '',
+                  flintr_mintDatetime: flintrMeta.mintDatetime || '',
+                  flintr_bondingCurve: flintrMeta.bondingCurve || '',
+                  flintr_associatedBondingCurve:
+                    flintrMeta.associatedBondingCurve || '',
+                  flintr_marketCapInSOL: flintrMeta.marketCapInSOL || '',
+                  flintr_pumpTrades: flintrMeta.pumpTrades || '',
+                  flintr_pumpLikes: flintrMeta.pumpLikes || '',
+                  flintr_pumpReplies: flintrMeta.pumpReplies || '',
+                }
+              : {};
+
+          await redis.hset(`position:${copySignal.mint}`, {
+            ...basePositionFields,
+            ...flintrFields,
           });
 
           await redis.setex(`copy_cooldown:${copySignal.mint}`, 60, '1');
 
           if (process.env.TELEGRAM_OWNER_CHAT_ID) {
             try {
-              const confidenceEmoji = decision.confidence >= 80 ? '🔥' :
-                                     decision.confidence >= 60 ? '🟢' : '🟡';
+              const confidenceEmoji =
+                decision.confidence >= 80
+                  ? '🔥'
+                  : decision.confidence >= 60
+                  ? '🟢'
+                  : '🟡';
 
               const dexEmoji = '🚀'; // Pump.fun
 
               await sendTelegramAlert(
                 process.env.TELEGRAM_OWNER_CHAT_ID,
                 `${confidenceEmoji} SMART COPY BUY\n\n` +
-                `Trader: ${copySignal.walletName}\n` +
-                `Token: ${copySignal.mint.slice(0, 16)}...\n` +
-                `\n` +
-                `${dexEmoji} Bought on: ${executedDex}\n` +
-                `${copySignal.dex && copySignal.dex !== executedDex ? `Original DEX: ${copySignal.dex}\n` : ''}` +
-                `Price: $${currentPrice.toFixed(10)}\n` +
-                `Amount: ${decision.amount.toFixed(4)} SOL\n` +
-                `\n` +
-                `Upvotes: ${decision.upvotes} wallet(s)\n` +
-                `Confidence: ${decision.confidence}%\n` +
-                `\n` +
-                `🎯 HYBRID Exit Strategy:\n` +
-                `• 0-3 min: Copy wallet exits\n` +
-                `• 3-10 min: Copy only on loss\n` +
-                `• 10+ min: Independent trading\n` +
-                `• Take Profit: +${process.env.COPY_PROFIT_TARGET || 200}%\n` +
-                `• Trailing Stop: -${process.env.TRAILING_STOP || 35}%\n` +
-                `• Stop Loss: -${process.env.COPY_STOP_LOSS || 25}%`,
-                false
+                  `Trader: ${copySignal.walletName}\n` +
+                  `Token: ${copySignal.mint.slice(0, 16)}...\n` +
+                  `\n` +
+                  `${dexEmoji} Bought on: ${executedDex}\n` +
+                  `${
+                    copySignal.dex && copySignal.dex !== executedDex
+                      ? `Original DEX: ${copySignal.dex}\n`
+                      : ''
+                  }` +
+                  `Price: $${currentPrice.toFixed(10)}\n` +
+                  `Amount: ${decision.amount.toFixed(4)} SOL\n` +
+                  `\n` +
+                  `Upvotes: ${decision.upvotes} wallet(s)\n` +
+                  `Confidence: ${decision.confidence}%\n` +
+                  `\n` +
+                  `🎯 HYBRID Exit Strategy:\n` +
+                  `• 0-3 min: Copy wallet exits\n` +
+                  `• 3-10 min: Copy only on loss\n` +
+                  `• 10+ min: Independent trading\n` +
+                  `• Take Profit: +${
+                    process.env.COPY_PROFIT_TARGET || 200
+                  }%\n` +
+                  `• Trailing Stop: -${
+                    process.env.TRAILING_STOP || 35
+                  }%\n` +
+                  `• Stop Loss: -${process.env.COPY_STOP_LOSS || 25}%`,
+                false,
               );
             } catch (e) {
               console.log('⚠️ Telegram notification failed');
             }
           }
-
         } else {
           console.log(`❌ BUY FAILED: ${buyResult.error}\n`);
         }
       }
-
     } catch (error) {
       console.error('❌ Error processing copy signal:', error.message);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
 }
@@ -327,7 +386,7 @@ async function processSellSignals() {
       const signalJson = await redis.lpop('sell_signals');
 
       if (!signalJson) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         continue;
       }
 
@@ -362,21 +421,20 @@ async function processSellSignals() {
             await sendTelegramAlert(
               process.env.TELEGRAM_OWNER_CHAT_ID,
               `⚠️ MULTIPLE TRADERS SELLING\n\n` +
-              `Token: ${mint.slice(0, 16)}...\n` +
-              `Sellers: ${sellCount}/${minToSell} wallets\n` +
-              `\n` +
-              `Hybrid strategy will evaluate exit...`,
-              false
+                `Token: ${mint.slice(0, 16)}...\n` +
+                `Sellers: ${sellCount}/${minToSell} wallets\n` +
+                `\n` +
+                `Hybrid strategy will evaluate exit...`,
+              false,
             );
           } catch (e) {}
         }
       } else {
         console.log(`   ⏳ Only ${sellCount}/${minToSell} wallets sold - waiting\n`);
       }
-
     } catch (error) {
       console.error('❌ Error processing sell signal:', error.message);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
 }
@@ -387,7 +445,7 @@ async function monitorOpenPositions() {
   while (true) {
     try {
       if (!ENABLE_TRADING || !tradeExecutor || !positionManager) {
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
         continue;
       }
 
@@ -402,7 +460,9 @@ async function monitorOpenPositions() {
         const valueData = await calculateCurrentValue(position.mint, tokensAmount);
 
         if (!valueData) {
-          console.log(`   ⚠️ Could not get current value for ${position.mint.slice(0, 8)}`);
+          console.log(
+            `   ⚠️ Could not get current value for ${position.mint.slice(0, 8)}`,
+          );
           continue;
         }
 
@@ -434,43 +494,66 @@ async function monitorOpenPositions() {
 
           console.log(`\n🎓 FORCE EXIT: Graduation detected`);
           console.log(`   Reason: ${forceExit}`);
-          console.log(`   PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% (${pnlSOL >= 0 ? '+' : ''}${pnlSOL.toFixed(4)} SOL)`);
+          console.log(
+            `   PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% (${
+              pnlSOL >= 0 ? '+' : ''
+            }${pnlSOL.toFixed(4)} SOL)`,
+          );
           console.log(`   Priority: 1 (Graduation override)\n`);
 
           await executeSell(position, currentPrice, currentSolValue, forceExit);
           continue;
         }
 
-        const hybridExit = await evaluateHybridExit(position, currentPrice, pnlPercent, currentSolValue);
+        const hybridExit = await evaluateHybridExit(
+          position,
+          currentPrice,
+          pnlPercent,
+          currentSolValue,
+        );
 
         if (hybridExit.shouldExit) {
           console.log(`\n🎯 HYBRID EXIT: ${hybridExit.reason.toUpperCase()}`);
           console.log(`   ${hybridExit.description}`);
-          console.log(`   Phase: ${hybridExit.phase}`);
-          console.log(`   PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% (${pnlSOL >= 0 ? '+' : ''}${pnlSOL.toFixed(4)} SOL)`);
+          console.log(
+            `   PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% (${
+              pnlSOL >= 0 ? '+' : ''
+            }${pnlSOL.toFixed(4)} SOL)`,
+          );
           console.log(`   Priority: ${hybridExit.priority}\n`);
 
           await executeSell(position, currentPrice, currentSolValue, hybridExit.reason);
           continue;
         }
 
-        const exitDecision = await copyStrategy.shouldExit(position, currentPrice);
+        const exitDecision = await copyStrategy.shouldExit(
+          position,
+          currentPrice,
+        );
 
         if (exitDecision.exit) {
           console.log(`\n🚪 EXIT SIGNAL: ${exitDecision.reason.toUpperCase()}`);
           console.log(`   ${exitDecision.description}`);
-          console.log(`   PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% (${pnlSOL >= 0 ? '+' : ''}${pnlSOL.toFixed(4)} SOL)`);
+          console.log(
+            `   PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% (${
+              pnlSOL >= 0 ? '+' : ''
+            }${pnlSOL.toFixed(4)} SOL)`,
+          );
           console.log(`   Priority: ${exitDecision.priority || 'N/A'}\n`);
 
-          await executeSell(position, currentPrice, currentSolValue, exitDecision.reason);
+          await executeSell(
+            position,
+            currentPrice,
+            currentSolValue,
+            exitDecision.reason,
+          );
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     } catch (error) {
       console.error('❌ Error monitoring positions:', error.message);
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
 }
@@ -480,7 +563,7 @@ async function executeSell(position, currentPrice, solReceived, reason) {
     // Siempre vendemos vía PumpPortal / Pump.fun
     const sellResult = await tradeExecutor.sellToken(
       position.mint,
-      parseInt(position.tokensAmount)
+      parseInt(position.tokensAmount),
     );
 
     if (sellResult.success) {
@@ -497,28 +580,35 @@ async function executeSell(position, currentPrice, solReceived, reason) {
         parseInt(position.tokensAmount),
         sellResult.solReceived,
         reason,
-        sellResult.signature
+        sellResult.signature,
       );
 
-      await redis.del(`wallet_sold:${position.walletSource}:${position.mint}`);
+      await redis.del(
+        `wallet_sold:${position.walletSource}:${position.mint}`,
+      );
 
       if (process.env.TELEGRAM_OWNER_CHAT_ID && closedPosition) {
         try {
-          const emoji = parseFloat(closedPosition.pnlSOL) >= 0 ? '✅' : '❌';
+          const emoji =
+            parseFloat(closedPosition.pnlSOL) >= 0 ? '✅' : '❌';
           const modeStr = DRY_RUN ? '📄 PAPER' : '💰 LIVE';
-          const holdTime = ((Date.now() - parseInt(position.entryTime)) / 1000).toFixed(0);
+          const holdTime = (
+            (Date.now() - parseInt(position.entryTime)) /
+            1000
+          ).toFixed(0);
           const entryPrice = parseFloat(position.entryPrice);
 
           const reasonMap = {
-            'wallet_exit_early': '⚡ Phase 1: Wallet Exit (0-3 min)',
-            'wallet_exit_loss_protection': '🛡️ Phase 2: Wallet Exit + Loss Protection',
-            'take_profit': '💰 Take Profit',
-            'trailing_stop': '📉 Trailing Stop',
-            'stop_loss': '🛑 Stop Loss',
-            'traders_sold': '💼 Multiple Traders Sold',
-            'traders_sold_auto': '💼 Traders Auto-Sell',
-            'max_hold_time': '⏱️ Max Hold Time',
-            'manual_sell': '👤 Manual Sell'
+            wallet_exit_early: '⚡ Phase 1: Wallet Exit (0-3 min)',
+            wallet_exit_loss_protection:
+              '🛡️ Phase 2: Wallet Exit + Loss Protection',
+            take_profit: '💰 Take Profit',
+            trailing_stop: '📉 Trailing Stop',
+            stop_loss: '🛑 Stop Loss',
+            traders_sold: '💼 Multiple Traders Sold',
+            traders_sold_auto: '💼 Traders Auto-Sell',
+            max_hold_time: '⏱️ Max Hold Time',
+            manual_sell: '👤 Manual Sell',
           };
 
           const exitReason = reasonMap[reason] || reason.toUpperCase();
@@ -526,20 +616,21 @@ async function executeSell(position, currentPrice, solReceived, reason) {
           await sendTelegramAlert(
             process.env.TELEGRAM_OWNER_CHAT_ID,
             `${emoji} ${modeStr} EXIT: ${exitReason}\n\n` +
-            `Trader: ${position.walletName || 'Unknown'}\n` +
-            `Token: ${position.mint.slice(0, 16)}...\n` +
-            `Hold: ${holdTime}s\n` +
-            `\n` +
-            `Entry: ${entryPrice.toFixed(10)}\n` +
-            `Exit: ${currentPrice.toFixed(10)}\n` +
-            `\n` +
-            `PnL: ${parseFloat(closedPosition.pnlPercent).toFixed(2)}% ` +
-            `(${parseFloat(closedPosition.pnlSOL).toFixed(4)} SOL)`,
-            false
+              `Trader: ${position.walletName || 'Unknown'}\n` +
+              `Token: ${position.mint.slice(0, 16)}...\n` +
+              `Hold: ${holdTime}s\n` +
+              `\n` +
+              `Entry: ${entryPrice.toFixed(10)}\n` +
+              `Exit: ${currentPrice.toFixed(10)}\n` +
+              `\n` +
+              `PnL: ${parseFloat(closedPosition.pnlPercent).toFixed(
+                2,
+              )}% ` +
+              `(${parseFloat(closedPosition.pnlSOL).toFixed(4)} SOL)`,
+            false,
           );
         } catch (e) {}
       }
-
     } else {
       console.log(`❌ SELL FAILED: ${sellResult.error}\n`);
     }
@@ -556,12 +647,16 @@ async function sendPnLUpdate(position, currentPrice, pnlPercent, currentSolValue
   try {
     const entryPrice = parseFloat(position.entryPrice);
     const maxPrice = parseFloat(position.maxPrice || entryPrice);
-    const holdTime = ((Date.now() - parseInt(position.entryTime)) / 1000).toFixed(0);
+    const holdTime = (
+      (Date.now() - parseInt(position.entryTime)) /
+      1000
+    ).toFixed(0);
     const upvotes = parseInt(position.upvotes || '1');
     const solSpent = parseFloat(position.solAmount);
     const pnlSOL = currentSolValue - solSpent;
 
-    const sellCount = await redis.scard(`upvotes:${position.mint}:sellers`) || 0;
+    const sellCount =
+      (await redis.scard(`upvotes:${position.mint}:sellers`)) || 0;
     const minToSell = parseInt(process.env.MIN_WALLETS_TO_SELL || '1');
 
     const holdTimeMs = Date.now() - parseInt(position.entryTime);
@@ -569,32 +664,43 @@ async function sendPnLUpdate(position, currentPrice, pnlPercent, currentSolValue
     if (holdTimeMs < WALLET_EXIT_WINDOW) {
       phaseInfo = '⚡ Phase 1: Following wallet';
     } else if (holdTimeMs < LOSS_PROTECTION_WINDOW) {
-      phaseInfo = pnlPercent < 0 ? '🛡️ Phase 2: Loss protection active' : '🟢 Phase 2: Letting it run';
+      phaseInfo =
+        pnlPercent < 0
+          ? '🛡️ Phase 2: Loss protection active'
+          : '🟢 Phase 2: Letting it run';
     } else {
       phaseInfo = '🚀 Phase 3: Independent mode';
     }
 
-    const emoji = pnlPercent >= 20 ? '🚀' :
-                  pnlPercent >= 10 ? '📈' :
-                  pnlPercent >= 0 ? '🟢' :
-                  pnlPercent >= -5 ? '🟡' : '🔴';
+    const emoji =
+      pnlPercent >= 20
+        ? '🚀'
+        : pnlPercent >= 10
+        ? '📈'
+        : pnlPercent >= 0
+        ? '🟢'
+        : pnlPercent >= -5
+        ? '🟡'
+        : '🔴';
 
     await sendTelegramAlert(
       chatId,
       `${emoji} P&L UPDATE\n\n` +
-      `Mint: ${position.mint.slice(0, 16)}...\n` +
-      `Entry: $${entryPrice.toFixed(10)}\n` +
-      `Current: $${currentPrice.toFixed(10)}\n` +
-      `Max: $${maxPrice.toFixed(10)}\n` +
-      `\n` +
-      `💰 PnL: ${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}% ` +
-      `(${pnlSOL >= 0 ? '+' : ''}${pnlSOL.toFixed(4)} SOL)\n` +
-      `⏱️ Hold: ${holdTime}s\n` +
-      `🎯 Upvotes: ${upvotes}\n` +
-      `📉 Sellers: ${sellCount}/${minToSell}\n` +
-      `\n` +
-      `${phaseInfo}`,
-      true
+        `Mint: ${position.mint.slice(0, 16)}...\n` +
+        `Entry: $${entryPrice.toFixed(10)}\n` +
+        `Current: $${currentPrice.toFixed(10)}\n` +
+        `Max: $${maxPrice.toFixed(10)}\n` +
+        `\n` +
+        `💰 PnL: ${
+          pnlPercent >= 0 ? '+' : ''
+        }${pnlPercent.toFixed(2)}% ` +
+        `(${pnlSOL >= 0 ? '+' : ''}${pnlSOL.toFixed(4)} SOL)\n` +
+        `⏱️ Hold: ${holdTime}s\n` +
+        `🎯 Upvotes: ${upvotes}\n` +
+        `📉 Sellers: ${sellCount}/${minToSell}\n` +
+        `\n` +
+        `${phaseInfo}`,
+      true,
     );
   } catch (e) {}
 }
@@ -606,21 +712,27 @@ setInterval(async () => {
 
     if (openPositions > 0 || pendingSignals > 0) {
       const mode = DRY_RUN ? '📄 PAPER' : '💰 LIVE';
-      console.log(`\n${mode} - Positions: ${openPositions} | Pending: ${pendingSignals}\n`);
+      console.log(
+        `\n${mode} - Positions: ${openPositions} | Pending: ${pendingSignals}\n`,
+      );
     }
   } catch (error) {}
 }, 60000);
 
 console.log('🚀 Copy Monitor HYBRID strategy started');
-console.log(`   Mode: ${DRY_RUN ? '📄 PAPER TRADING' : '💰 LIVE TRADING'}`);
-console.log(`   Executor: TradeExecutor via PumpPortal (Pump.fun only, COPY TRADING)`);
+console.log(
+  `   Mode: ${DRY_RUN ? '📄 PAPER TRADING' : '💰 LIVE TRADING'}`,
+);
+console.log(
+  `   Executor: TradeExecutor via PumpPortal (Pump.fun only, COPY TRADING)`,
+);
 console.log(`   🎯 HYBRID exit: Phase 1-3 with trailing stop\n`);
 
 Promise.all([
   processCopySignals(),
   processSellSignals(),
-  monitorOpenPositions()
-]).catch(error => {
+  monitorOpenPositions(),
+]).catch((error) => {
   console.error('❌ Copy monitor crashed:', error.message);
   process.exit(1);
 });
