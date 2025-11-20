@@ -1,4 +1,4 @@
-// worker.js - Pump.fun COPY TRADING Worker with ENV CLEANER + Flintr
+// worker.js - Pump.fun COPY TRADING Worker with ENV CLEANER + Flintr (HTTP metadata only)
 
 import 'dotenv/config';
 import { cleanAndValidateEnv } from './envCleaner.js';
@@ -6,7 +6,6 @@ import IORedis from 'ioredis';
 import { RiskManager } from './riskManager.js';
 import { initWalletTracker } from './walletTracker.js';
 import { startGraduationWatcher } from './graduationHandler.js';
-import { startFlintrListener } from './flintrClient.js';
 
 // ⚠️ Import side-effect: copyMonitor arranca sus loops internos
 import './copyMonitor.js';
@@ -42,19 +41,33 @@ async function startWorker() {
     await redis.ping();
     console.log('✅ Worker Redis connected');
   } catch (error) {
-    console.log('❌ Worker Redis connection failed:', error?.message || String(error));
+    console.log(
+      '❌ Worker Redis connection failed:',
+      error?.message || String(error),
+    );
     return;
   }
 
   const DRY_RUN = parseBoolEnv(process.env.DRY_RUN, true);
-  const ENABLE_AUTO_TRADING = parseBoolEnv(process.env.ENABLE_AUTO_TRADING, true);
+  const ENABLE_AUTO_TRADING = parseBoolEnv(
+    process.env.ENABLE_AUTO_TRADING,
+    true,
+  );
 
   console.log('\n🎯 Pump.fun COPY TRADING Worker Config:');
   console.log(`   Mode: ${DRY_RUN ? '📄 PAPER (DRY_RUN)' : '💰 LIVE'}`);
-  console.log(`   ENABLE_AUTO_TRADING: ${ENABLE_AUTO_TRADING ? 'ON' : 'OFF'}`);
-  console.log(`   POSITION_SIZE_SOL: ${process.env.POSITION_SIZE_SOL || '0.05'} SOL`);
-  console.log(`   MAX_POSITIONS: ${process.env.MAX_POSITIONS || '2'} (copy strategy)`);
-  console.log(`   MIN_LIQUIDITY_SOL: ${process.env.MIN_LIQUIDITY_SOL || '8'} SOL`);
+  console.log(
+    `   ENABLE_AUTO_TRADING: ${ENABLE_AUTO_TRADING ? 'ON' : 'OFF'}`,
+  );
+  console.log(
+    `   POSITION_SIZE_SOL: ${process.env.POSITION_SIZE_SOL || '0.05'} SOL`,
+  );
+  console.log(
+    `   MAX_POSITIONS: ${process.env.MAX_POSITIONS || '2'} (copy strategy)`,
+  );
+  console.log(
+    `   MIN_LIQUIDITY_SOL: ${process.env.MIN_LIQUIDITY_SOL || '8'} SOL`,
+  );
   console.log(
     `   STOP_LOSS: ${
       parseBoolEnv(process.env.STOP_LOSS_ENABLED, false)
@@ -93,21 +106,30 @@ async function startWorker() {
     // 3) Wallet Tracker (genera copy_signals / sell_signals)
     const tracker = await initWalletTracker();
     if (!tracker) {
-      console.log('⚠️ WalletTracker not started (RPC_URL or wallets missing)');
+      console.log(
+        '⚠️ WalletTracker not started (RPC_URL or wallets missing)',
+      );
     } else {
-      console.log('👁️ WalletTracker started (copy signals will be generated)');
+      console.log(
+        '👁️ WalletTracker started (copy signals will be generated)',
+      );
     }
 
-    // 4) Flintr listener - solo para metadata de tokens (Pump.fun)
-    const flintrWs = startFlintrListener(redis);
-    if (flintrWs) {
-      console.log('🔥 Flintr listener running (metadata cache for Pump.fun tokens)');
+    // 4) Flintr en modo METADATA ONLY (HTTP, sin WebSocket)
+    if (process.env.FLINTR_API_KEY) {
+      console.log(
+        '🔥 Flintr metadata mode enabled (HTTP only, no WebSocket)',
+      );
     } else {
-      console.log('⚠️ Flintr listener not started (no FLINTR_API_KEY or Redis issue)');
+      console.log(
+        '⚠️ FLINTR_API_KEY not set - Flintr metadata disabled',
+      );
     }
 
     // 5) copyMonitor ya está corriendo por el import (loops internos)
-    console.log('🧠 copyMonitor loops are running (BUY/SELL logic + HYBRID exits)');
+    console.log(
+      '🧠 copyMonitor loops are running (BUY/SELL logic + HYBRID exits)',
+    );
 
     // 6) Stats periódicos (usa RiskManager + Redis)
     const statsIntervalMs = parseInt(
@@ -153,7 +175,9 @@ async function startWorker() {
     }, statsIntervalMs);
 
     console.log('✅ Pump.fun COPY TRADING Worker is running');
-    console.log('   WalletTracker → Redis(copy_signals/sell_signals) → copyMonitor + Flintr\n');
+    console.log(
+      '   WalletTracker → Redis(copy_signals/sell_signals) → copyMonitor + Flintr\n',
+    );
   } catch (error) {
     console.log('❌ Worker setup failed:', error?.message || String(error));
     process.exit(1);
@@ -168,7 +192,7 @@ process.on('unhandledRejection', (err) => {
 process.on('SIGINT', async () => {
   console.log('\n\n🛑 Shutting down worker...');
   try {
-    // Aquí en el futuro podrías cerrar conexiones WS del WalletTracker, etc.
+    // Aquí en el futuro podrías cerrar conexiones, etc.
   } catch {}
   console.log('✅ Worker stopped gracefully\n');
   process.exit(0);
