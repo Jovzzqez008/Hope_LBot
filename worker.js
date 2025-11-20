@@ -1,4 +1,4 @@
-// worker.js - Pump.fun COPY TRADING Worker with ENV CLEANER
+// worker.js - Pump.fun COPY TRADING Worker with ENV CLEANER + Flintr
 
 import 'dotenv/config';
 import { cleanAndValidateEnv } from './envCleaner.js';
@@ -6,6 +6,7 @@ import IORedis from 'ioredis';
 import { RiskManager } from './riskManager.js';
 import { initWalletTracker } from './walletTracker.js';
 import { startGraduationWatcher } from './graduationHandler.js';
+import { startFlintrListener } from './flintrClient.js';
 
 // ⚠️ Import side-effect: copyMonitor arranca sus loops internos
 import './copyMonitor.js';
@@ -97,10 +98,18 @@ async function startWorker() {
       console.log('👁️ WalletTracker started (copy signals will be generated)');
     }
 
-    // 4) copyMonitor ya está corriendo por el import (loops internos)
+    // 4) Flintr listener - solo para metadata de tokens (Pump.fun)
+    const flintrWs = startFlintrListener(redis);
+    if (flintrWs) {
+      console.log('🔥 Flintr listener running (metadata cache for Pump.fun tokens)');
+    } else {
+      console.log('⚠️ Flintr listener not started (no FLINTR_API_KEY or Redis issue)');
+    }
+
+    // 5) copyMonitor ya está corriendo por el import (loops internos)
     console.log('🧠 copyMonitor loops are running (BUY/SELL logic + HYBRID exits)');
 
-    // 5) Stats periódicos (usa RiskManager + Redis)
+    // 6) Stats periódicos (usa RiskManager + Redis)
     const statsIntervalMs = parseInt(
       process.env.RISK_TICK_INTERVAL || '120000',
       10,
@@ -144,7 +153,7 @@ async function startWorker() {
     }, statsIntervalMs);
 
     console.log('✅ Pump.fun COPY TRADING Worker is running');
-    console.log('   WalletTracker → Redis(copy_signals/sell_signals) → copyMonitor\n');
+    console.log('   WalletTracker → Redis(copy_signals/sell_signals) → copyMonitor + Flintr\n');
   } catch (error) {
     console.log('❌ Worker setup failed:', error?.message || String(error));
     process.exit(1);
