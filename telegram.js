@@ -95,6 +95,10 @@ export async function initTelegram() {
           `/status    - Estado del bot + P&L abierto (copy)\n` +
           `/positions - Posiciones abiertas (copy trading)\n` +
           `/stats     - Rendimiento de hoy (realizado)\n\n` +
+          `👁️ Wallets:\n` +
+          `/wallets           - Ver wallets copiadas\n` +
+          `/addwallet <addr>  - Añadir wallet\n` +
+          `/removewallet <addr> - Quitar wallet\n\n` +
           `💰 Gestión manual (Copy Trading):\n` +
           `/sell MINT  - Cerrar UNA posición de copy (simulado, sin TX)\n` +
           `/sell_all   - Cerrar TODAS las posiciones de copy (simulado)\n\n` +
@@ -188,7 +192,7 @@ export async function initTelegram() {
         const { RiskManager } = await import('./riskManager.js');
         const riskManager = RiskManager.createFromEnv(redis);
         const openPnL = await riskManager.getOpenPnL();
-        const positions = openPnL.positions || [];
+        const positions = openPnL.positions || []
 
         const copyPositions = positions.filter(
           (p) =>
@@ -480,6 +484,110 @@ export async function initTelegram() {
         await safeSend(
           chatId,
           `❌ Error: ${error?.message || String(error)}`,
+        );
+      }
+    });
+
+    // ═════════════════════════════════════════════════════
+    // /wallets - listar wallets de copy trading
+    // ═════════════════════════════════════════════════════
+    bot.onText(/\/wallets/, async (msg) => {
+      const chatId = msg.chat.id;
+      if (!isOwner(chatId)) return;
+      if (!redis) {
+        return safeSend(chatId, '❌ Redis no está configurado para Telegram.');
+      }
+
+      try {
+        const wallets = await redis.smembers('copy_wallets');
+        if (!wallets || wallets.length === 0) {
+          return safeSend(
+            chatId,
+            '📭 No hay wallets configuradas para copy trading.',
+          );
+        }
+
+        let text = '👁️ Wallets en seguimiento (copy trading):\n\n';
+        for (const w of wallets) {
+          text += `• ${w}\n`;
+        }
+
+        await safeSend(chatId, text);
+      } catch (error) {
+        await safeSend(
+          chatId,
+          `❌ Error listando wallets: ${error?.message || String(error)}`,
+        );
+      }
+    });
+
+    // ═════════════════════════════════════════════════════
+    // /addwallet <address> - añadir wallet a Redis
+    // ═════════════════════════════════════════════════════
+    bot.onText(/\/addwallet(?:\s+([1-9A-HJ-NP-Za-km-z]{32,64}))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isOwner(chatId)) return;
+      if (!redis) {
+        return safeSend(chatId, '❌ Redis no está configurado para Telegram.');
+      }
+
+      const address = match?.[1]?.trim();
+      if (!address) {
+        return safeSend(
+          chatId,
+          '❌ Uso: /addwallet <address>\nEjemplo:\n/addwallet 7Xo123abcdeF1kxxWcC9ygvRvtXjHThqipw',
+        );
+      }
+
+      try {
+        await redis.sadd('copy_wallets', address);
+        await safeSend(
+          chatId,
+          `✅ Wallet añadida para copy trading:\n${address}`,
+        );
+      } catch (error) {
+        await safeSend(
+          chatId,
+          `❌ Error añadiendo wallet: ${error?.message || String(error)}`,
+        );
+      }
+    });
+
+    // ═════════════════════════════════════════════════════
+    // /removewallet <address> - quitar wallet de Redis
+    // ═════════════════════════════════════════════════════
+    bot.onText(/\/removewallet(?:\s+([1-9A-HJ-NP-Za-km-z]{32,64}))?/, async (msg, match) => {
+      const chatId = msg.chat.id;
+      if (!isOwner(chatId)) return;
+      if (!redis) {
+        return safeSend(chatId, '❌ Redis no está configurado para Telegram.');
+      }
+
+      const address = match?.[1]?.trim();
+      if (!address) {
+        return safeSend(
+          chatId,
+          '❌ Uso: /removewallet <address>\nEjemplo:\n/removewallet 7Xo123abcdeF1kxxWcC9ygvRvtXjHThqipw',
+        );
+      }
+
+      try {
+        const removed = await redis.srem('copy_wallets', address);
+        if (!removed) {
+          return safeSend(
+            chatId,
+            `ℹ️ Esa wallet no estaba registrada:\n${address}`,
+          );
+        }
+
+        await safeSend(
+          chatId,
+          `🗑️ Wallet removida del copy trading:\n${address}`,
+        );
+      } catch (error) {
+        await safeSend(
+          chatId,
+          `❌ Error removiendo wallet: ${error?.message || String(error)}`,
         );
       }
     });
