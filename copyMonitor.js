@@ -1,7 +1,5 @@
 // copyMonitor.js - HYBRID smart copy trading monitor (solo COPY TRADING)
 
-import { GraduationHandler } from './graduationHandler.js';
-const graduationHandler = new GraduationHandler();
 import IORedis from 'ioredis';
 import { CopyStrategy } from './copyStrategy.js';
 import { sendTelegramAlert } from './telegram.js';
