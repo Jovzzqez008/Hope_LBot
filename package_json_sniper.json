@@ -1,0 +1,40 @@
+{
+  "name": "pumpfun-sniper-bot",
+  "version": "1.0.0",
+  "description": "Advanced sniper bot for Pump.fun with real-time momentum analysis",
+  "main": "worker.js",
+  "type": "module",
+  "scripts": {
+    "start": "node worker.js",
+    "server": "node server.js",
+    "dev": "nodemon worker.js"
+  },
+  "keywords": [
+    "solana",
+    "pumpfun",
+    "sniper",
+    "trading",
+    "bot",
+    "momentum",
+    "candles"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2",
+    "@solana/web3.js": "^1.95.3",
+    "bs58": "^5.0.0",
+    "cross-fetch": "^4.0.0",
+    "dotenv": "^16.4.1",
+    "ioredis": "^5.3.2",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.16.0",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
